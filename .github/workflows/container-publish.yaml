@@ -74,7 +74,7 @@ jobs:
           cat <<EOF > nginx.conf
           server {
               listen 8000;
-              server_name localhost;
+              server_name _;
               root /app;
               index index.html;
               location / {
@@ -97,9 +97,10 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ steps.lowercase.outputs.actor }}/${{ steps.lowercase.outputs.repository }}:${{ steps.npm_version.outputs.version }}
-            ghcr.io/${{ steps.lowercase.outputs.actor }}/${{ steps.lowercase.outputs.repository }}:latest
+            ghcr.io/${{ steps.lowercase.outputs.actor }}/vscode-web-standalone:${{ steps.npm_version.outputs.version }}
+            ghcr.io/${{ steps.lowercase.outputs.actor }}/vscode-web-standalone:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
