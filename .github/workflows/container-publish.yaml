@@ -1,4 +1,4 @@
-name: Build and Publish VSCode Web Docker Image
+name: Build and Publish VSCode Web Container Image
 
 on:
   schedule:
@@ -14,62 +14,36 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Set Variables
-        uses: actions/github-script@v7
-        id: lowercase
-        with:
-          script: |
-            // convert everything to lowercase because ghcr repository name must be lowercase
-            const actor = context.actor.toLowerCase();
-            const repository = context.repo.repo.toLowerCase();
-            core.setOutput('actor', actor);
-            core.setOutput('repository', repository);
-
-      - name: Get Latest NPM Version
-        id: npm_version
+        id: variables
         run: |
-          VERSION=$(curl -s https://registry.npmjs.org/@github1s/vscode-web/latest | jq -r '.version')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Found latest NPM version: $VERSION"
+          echo "[INFO] Converting everything to lowercase because ghcr repository name must be lowercase..."
+          ACTOR="$(echo "${{ github.actor }}" | tr '[:upper:]' '[:lower:]')"
+          echo "actor=$ACTOR" >>$GITHUB_OUTPUT
+          REPOSITORY="$(echo "${{ github.repository }}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')"
+          echo "repository=$REPOSITORY" >>$GITHUB_OUTPUT
 
-      - name: Check if Image Tag Exists in GHCR
-        id: check_image
-        run: |
-          TAG="ghcr.io/${{ steps.lowercase.outputs.actor }}/${{ steps.lowercase.outputs.repository }}:${{ steps.npm_version.outputs.version }}"
-          # Use HEAD request to check manifest existence
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "$TAG")
-          if [ "$STATUS" -eq 200 ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Image tag $TAG already exists. Skipping build."
+          echo "[INFO] Getting Latest VSCode-Web version..."
+          VSCODEWEB_LATEST="$(curl -s https://registry.npmjs.org/@github1s/vscode-web/latest | jq -r '.version')"
+          echo "latest_vscodeweb=$VSCODEWEB_LATEST" >>$GITHUB_OUTPUT
+          echo "[INFO] Found latest VSCode-Web version: $VSCODEWEB_LATEST"
+          echo "[INFO] Checking if Image Tag Exists in GHCR..."
+
+          TAG="ghcr.io/$ACTOR/vscode-web-standalone:$VSCODEWEB_LATEST"
+          if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+            echo "[INFO] Image tag $TAG already exists. Skipping build..."
+            echo "imageexists=true" >> $GITHUB_OUTPUT
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Image tag $TAG not found. Proceeding with build."
+            echo "[INFO] Image tag $TAG not found. Proceeding with build..."
+            echo "imageexists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Exit if Version Exists
-        if: steps.check_image.outputs.exists == 'true'
-        run: exit 0
-
-      - name: Create Dockerfile
-        run: |
-          cat <<EOF > Dockerfile
-          FROM node:alpine as fetcher
-          WORKDIR /tmp/package
-          RUN npm install @github1s/vscode-web@${{ steps.npm_version.outputs.version }}
-
-          FROM nginx:latest
-          COPY nginx.conf /etc/nginx/conf.d/default.conf
-          COPY --from=fetcher /tmp/package/node_modules/@github1s/vscode-web /app
-          EXPOSE 8000
-          CMD ["nginx", "-g", "daemon off;"]
-          EOF
+      - name: Checkout Repository
+        if: steps.variables.outputs.imageexists == 'false'
+        uses: actions/checkout@v4
 
       - name: Create Nginx Config
+        if: steps.variables.outputs.imageexists == 'false'
         run: |
           cat <<EOF > nginx.conf
           server {
@@ -82,25 +56,43 @@ jobs:
               }
           }
           EOF
+      - name: Create Containerfile
+        if: steps.variables.outputs.imageexists == 'false'
+        run: |
+          cat <<EOF > Containerfile
+          FROM node:alpine as fetcher
+          WORKDIR /tmp/package
+          RUN npm install @github1s/vscode-web@${{ steps.variables.outputs.latest_vscodeweb }}
+
+          FROM nginx:alpine-slim
+          COPY nginx.conf /etc/nginx/conf.d/default.conf
+          COPY --from=fetcher /tmp/package/node_modules/@github1s/vscode-web /app
+          EXPOSE 8000
+          CMD ["nginx", "-g", "daemon off;"]
+          EOF
 
       - name: Set up Docker Buildx
+        if: steps.variables.outputs.imageexists == 'false'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
+        if: steps.variables.outputs.imageexists == 'false'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker Image
+      - name: Build and Push Container Image
+        if: steps.variables.outputs.imageexists == 'false'
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Containerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ steps.lowercase.outputs.actor }}/vscode-web-standalone:${{ steps.npm_version.outputs.version }}
-            ghcr.io/${{ steps.lowercase.outputs.actor }}/vscode-web-standalone:latest
+            ghcr.io/${{ steps.variables.outputs.actor }}/vscode-web-standalone:${{ steps.variables.outputs.latest_vscodeweb }}
+            ghcr.io/${{ steps.variables.outputs.actor }}/vscode-web-standalone:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
