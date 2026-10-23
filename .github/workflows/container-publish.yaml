@@ -60,7 +60,7 @@ jobs:
         if: steps.variables.outputs.imageexists == 'false'
         run: |
           cat <<EOF > Containerfile
-          FROM node:alpine as fetcher
+          FROM --platform=$BUILDPLATFORM node:alpine as fetcher
           WORKDIR /tmp/package
           RUN npm install @github1s/vscode-web@${{ steps.variables.outputs.latest_vscodeweb }}
 
